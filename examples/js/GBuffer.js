@@ -17,6 +17,7 @@ zen3d.GBuffer = (function() {
 	var MaterialCache = function() {
 		var normalGlossinessMaterials = new Map();
 		var albedoMetalnessMaterials = new Map();
+		var motionMaterials = new Map();
 		var MRTMaterials = new Map();
 
 		var state = {};
@@ -114,10 +115,27 @@ zen3d.GBuffer = (function() {
 			return material;
 		}
 
+		function getMotionMaterial(renderable) {
+			generateMaterialState(renderable, state);
+
+			var material;
+			var code = statestate.useSkinning +
+				"_" + state.morphTargets;
+			if (!motionMaterials.has(code)) {
+				material = new zen3d.ShaderMaterial(GBufferShader.motion);
+				motionMaterials.set(code, material);
+			} else {
+				material = motionMaterials.get(code);
+			}
+
+			return material;
+		}
+
 		return {
 			getMrtMaterial: getMrtMaterial,
 			getNormalGlossinessMaterial: getNormalGlossinessMaterial,
-			getAlbedoMetalnessMaterial: getAlbedoMetalnessMaterial
+			getAlbedoMetalnessMaterial: getAlbedoMetalnessMaterial,
+			getMotionMaterial: getMotionMaterial
 		}
 	}
 
@@ -155,15 +173,25 @@ zen3d.GBuffer = (function() {
 		this._renderTarget2.texture.magFilter = zen3d.WEBGL_TEXTURE_FILTER.LINEAR;
 		this._renderTarget2.texture.generateMipmaps = false;
 
+		this._renderTarget3 = new zen3d.RenderTarget2D(width, height);
+		this._renderTarget3.texture.type = zen3d.WEBGL_PIXEL_TYPE.HALF_FLOAT;
+		this._renderTarget3.texture.minFilter = zen3d.WEBGL_TEXTURE_FILTER.NEAREST;
+		this._renderTarget3.texture.magFilter = zen3d.WEBGL_TEXTURE_FILTER.NEAREST;
+		this._renderTarget3.texture.generateMipmaps = false;
+
+		// TODO remove
 		this._normalGlossinessMaterials = new Map();
 		this._albedoMetalnessMaterials = new Map();
 		this._MRTMaterials = new Map();
+		this._motionMaterials = new Map();
 
 		this._debugPass = new zen3d.ShaderPostPass(GBufferShader.debug);
 
 		this.enableNormalGlossiness = true;
 
 		this.enableAlbedoMetalness = true;
+
+		this.enableMotion = false;
 	}
 
 	Object.assign(GBuffer.prototype, {
@@ -265,6 +293,12 @@ zen3d.GBuffer = (function() {
 					}
 				});
 			}
+
+			// render motionRenderTarget
+
+			if (this.enableMotion) {
+				// TODO
+			}
 		},
 
 		/**
@@ -329,6 +363,17 @@ zen3d.GBuffer = (function() {
 			return this._useMRT ? this._texture2 : this._renderTarget2.texture;
 		},
 
+		/**
+         * Get motion texture.
+         * Channel storage:
+         * + R: velocity.x
+         * + G: velocity.y
+         * @return {zen3d.Texture2D}
+         */
+		getMotionTexture: function() {
+			return this._renderTarget3.texture;
+		},
+
 		dispose: function() {
 			this._renderTarget1.dispose();
 			this._renderTarget2.dispose();
@@ -339,10 +384,12 @@ zen3d.GBuffer = (function() {
 			materialCache.MRTMaterials.forEach(material => material.dispose());
 			materialCache.normalGlossinessMaterials.forEach(material => material.dispose());
 			materialCache.albedoMetalnessMaterials.forEach(material => material.dispose());
+			materialCache.motionMaterials.forEach(material => material.dispose());
 
 			materialCache.MRTMaterials.clear();
 			materialCache.normalGlossinessMaterials.clear();
 			materialCache.albedoMetalnessMaterials.clear();
+			materialCache.motionMaterials.clear();
 		}
 
 	});
@@ -471,6 +518,47 @@ zen3d.GBuffer = (function() {
 
 			].join("\n")
 
+		},
+
+		motion: {
+
+			uniforms: {
+
+				prevModelViewProjection: new Float32Array(16)
+
+			},
+
+			vertexShader: [
+				"#include <common_vert>",
+				"#include <morphtarget_pars_vert>",
+				"#include <skinning_pars_vert>",
+
+				"uniforms mat4 prevModelViewProjection",
+
+				"varying vec4 v_ScreenPosition;",
+				"varying vec4 v_PrevScreenPosition;",
+
+				"void main() {",
+				"	#include <begin_vert>",
+				"	#include <morphtarget_vert>",
+				"	#include <skinning_vert>",
+				"	#include <pvm_vert>",
+				// TODO prev skinning
+				"	v_ScreenPosition = u_Projection * u_View * u_Model * vec4(transformed, 1.0);",
+				"	v_PrevScreenPosition = prevModelViewProjection * vec4(transformed, 1.0);",
+				"}"
+			].join("\n"),
+
+			fragmentShader: [
+				"varying vec4 v_ScreenPosition;",
+				"varying vec4 v_PrevScreenPosition;",
+
+				"void main() {",
+				"	vec2 a = v_ViewPosition.xy / v_ViewPosition.w;",
+				"	vec2 b = v_PrevViewPosition.xy / v_PrevViewPosition.w;",
+				"	gl_FragColor = vec4((a - b) * 0.5 + 0.5, 0.0, 1.0);",
+				"}"
+			].join("\n"),
 		},
 
 		MRT: {
